@@ -1,13 +1,12 @@
 import requests
 import time
-import tldextract
 import urllib3
 from akamai.edgegrid import EdgeGridAuth
 
-# Disable SSL warnings (optional)
+# Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# DNS Providers (ONLY THESE TWO)
+# DNS Providers
 from core.akamDNS import akam
 from core.ctelx import ctel
 from getNS import getNS
@@ -18,13 +17,11 @@ SECTION = "default"
 
 BASE_URL = "https://akab-p63dmw3gdpa5cxgx-oivonvolbsqjgxex.luna.akamaiapis.net"
 
-TTL = 300
+TTL = "300"
 
-# -------- TEST MODE --------
 TEST_MODE = True
 TEST_DOMAINS = ["quicktest.in"]
 
-# -------- DNS + RETRY CONFIG --------
 DNS_PROPAGATION_WAIT = 60
 VALIDATION_RETRIES = 5
 RETRY_DELAY = 30
@@ -39,12 +36,21 @@ session.headers.update({
     "Content-Type": "application/json"
 })
 
-# ---------------- HELPER ----------------
-def extract_record_and_zone(fqdn):
-    ext = tldextract.extract(fqdn)
-    zone = f"{ext.domain}.{ext.suffix}"
-    record = fqdn.replace("." + zone, "")
-    return record, zone
+# ---------------- STRUCTURED PARSER (LIKE list.txt) ----------------
+def build_structured_entry(record_name, txt_value):
+    parts = record_name.split(".")
+
+    record = parts[0]
+    zone = ".".join(parts[1:])
+
+    return {
+        "record": record,
+        "zone": zone,
+        "ttl": TTL,
+        "rtype": "TXT",
+        "value": txt_value,
+        "action": "mod"
+    }
 
 
 # ---------------- FETCH DOMAINS ----------------
@@ -77,60 +83,48 @@ def get_all_domains():
     return all_domains
 
 
-# ---------------- UPDATE TXT RECORD ----------------
-def update_txt_record(record, value, zone):
-    print(f"\nUpdating DNS for: {record}.{zone}")
+# ---------------- DNS UPDATE (OLD SCRIPT STYLE) ----------------
+def updateTXTrecord(entry):
+    record = entry["record"]
+    zone = entry["zone"]
+    ttl = entry["ttl"]
+    value = entry["value"]
+    rtype = entry["rtype"]
+    action = entry["action"]
 
-    providers = getNS(zone, record, "TXT", "add")
+    print(f"\nUpdating: {record}.{zone}")
+    print(f"Structured Input → {record},{zone},{ttl},{rtype},{value},{action}")
+
+    providers = getNS(zone, record, rtype, 'add')
     print("Detected Providers:", providers)
 
     success = False
 
-    for ns in providers:
+    for NS in providers:
 
-        # -------- AKAMAI --------
-        if ns == "akam":
+        # ---- AKAMAI ----
+        if NS == 'akam':
             try:
-                result = akam(record, value, "mod", zone, "TXT", TTL)
-                print("Akamai MOD:", result)
+                result = akam(record, value, action, zone, rtype, ttl)
+                print("Akamai:", result)
 
-                if result != "Successful":
-                    print("Akamai MOD failed → trying ADD")
-                    result = akam(record, value, "add", zone, "TXT", TTL)
-                    print("Akamai ADD:", result)
-
-                if result == "Successful":
+                if result == 'Successful':
                     success = True
 
             except Exception as e:
-                print(f"Akamai FAILED: {e}")
+                print("Akamai Failed:", e)
 
-        # -------- CONSTELLIX --------
-        elif ns == "constellix":
+        # ---- CONSTELLIX ----
+        elif NS == 'constellix':
             try:
-                result = ctel(record, value, "mod", zone, "TXT", TTL)
-                print("Constellix MOD:", result)
+                result = ctel(record, value, action, zone, rtype, ttl)
+                print("Constellix:", result)
 
-                if result != "Successful":
-                    print("Constellix MOD failed → trying ADD")
-                    result = ctel(record, value, "add", zone, "TXT", TTL)
-                    print("Constellix ADD:", result)
-
-                if result == "Successful":
+                if result == 'Successful':
                     success = True
 
             except Exception as e:
-                print(f"Constellix ERROR → trying ADD fallback")
-
-                try:
-                    result = ctel(record, value, "add", zone, "TXT", TTL)
-                    print("Constellix ADD (fallback):", result)
-
-                    if result == "Successful":
-                        success = True
-
-                except Exception as e2:
-                    print(f"Constellix FAILED completely: {e2}")
+                print("Constellix Failed:", e)
 
     return success
 
@@ -161,14 +155,14 @@ def validate_domain(domain):
 
 # ---------------- MAIN PROCESS ----------------
 def process_domains(domains):
-    total_processed = 0
-    success_updates = 0
-    success_validations = 0
+    total = 0
+    dns_success = 0
+    validation_success = 0
 
     for d in domains:
         domain_name = d.get("domainName")
 
-        # TEST MODE FILTER
+        # TEST MODE
         if TEST_MODE and domain_name not in TEST_DOMAINS:
             continue
 
@@ -177,8 +171,6 @@ def process_domains(domains):
         if not TEST_MODE:
             if status not in ["REQUEST_ACCEPTED", "VALIDATION_IN_PROGRESS"]:
                 continue
-        else:
-            print(f"\nTEST MODE: Processing {domain_name}")
 
         challenge = d.get("validationChallenge", {})
         txt = challenge.get("txtRecord")
@@ -186,48 +178,47 @@ def process_domains(domains):
         if not txt:
             continue
 
-        total_processed += 1
+        total += 1
 
         record_name = txt.get("name")
         txt_value = txt.get("value")
 
         print("\n====================================")
-        print(f"Domain   : {domain_name}")
-        print(f"TXT Name : {record_name}")
+        print(f"Domain: {domain_name}")
+        print(f"TXT Name: {record_name}")
         print(f"TXT Value: {txt_value}")
 
-        record, zone = extract_record_and_zone(record_name)
-
-        print(f"Parsed → record: {record}, zone: {zone}")
+        # ✅ Build structured entry (LIKE list.txt)
+        entry = build_structured_entry(record_name, txt_value)
 
         # ---- STEP 1: DNS UPDATE ----
-        updated = update_txt_record(record, txt_value, zone)
+        updated = updateTXTrecord(entry)
 
         if not updated:
-            print("DNS update failed, skipping validation...")
+            print("DNS update failed → skipping validation")
             continue
 
-        success_updates += 1
+        dns_success += 1
 
         # ---- STEP 2: WAIT ----
-        print(f"Waiting {DNS_PROPAGATION_WAIT}s for DNS propagation...")
+        print(f"Waiting {DNS_PROPAGATION_WAIT}s...")
         time.sleep(DNS_PROPAGATION_WAIT)
 
         # ---- STEP 3: VALIDATE ----
         for attempt in range(1, VALIDATION_RETRIES + 1):
-            print(f"Validation attempt {attempt} for {domain_name}")
+            print(f"Validation attempt {attempt}")
 
             if validate_domain(domain_name):
-                success_validations += 1
+                validation_success += 1
                 break
 
             print(f"Retrying in {RETRY_DELAY}s...")
             time.sleep(RETRY_DELAY)
 
     print("\n========== FINAL SUMMARY ==========")
-    print(f"Total Processed Domains : {total_processed}")
-    print(f"DNS Updates Successful  : {success_updates}")
-    print(f"Validations Triggered   : {success_validations}")
+    print(f"Total Processed        : {total}")
+    print(f"DNS Updates Successful : {dns_success}")
+    print(f"Validations Triggered  : {validation_success}")
 
 
 # ---------------- ENTRY ----------------
