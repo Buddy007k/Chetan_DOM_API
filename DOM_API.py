@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # DNS Providers
 from core.akamDNS import akam
-from core.ctelx_v2 import ctel   # ✅ USE NEW FIXED FILE
+from core.ctelx_v2 import ctel
 from getNS import getNS
 
 # ---------------- CONFIG ----------------
@@ -19,9 +19,6 @@ SECTION = "default"
 BASE_URL = "https://akab-p63dmw3gdpa5cxgx-oivonvolbsqjgxex.luna.akamaiapis.net"
 
 TTL = "300"
-
-TEST_MODE = True
-TEST_DOMAINS = ["quicktest.in"]
 
 DNS_PROPAGATION_WAIT = 60
 VALIDATION_RETRIES = 5
@@ -37,20 +34,19 @@ session.headers.update({
     "Content-Type": "application/json"
 })
 
-# ---------------- CORRECT PARSER ----------------
+# ---------------- PARSER ----------------
 def build_structured_entry(record_name, txt_value):
     ext = tldextract.extract(record_name)
 
-    zone = f"{ext.domain}.{ext.suffix}"   # ✅ correct root domain
-    record = record_name.replace("." + zone, "")  # everything before zone
+    zone = f"{ext.domain}.{ext.suffix}"
+    record = record_name.replace("." + zone, "")
 
     return {
         "record": record,
         "zone": zone,
         "ttl": TTL,
         "rtype": "TXT",
-        "value": txt_value,
-        "action": "mod"
+        "value": txt_value
     }
 
 # ---------------- FETCH DOMAINS ----------------
@@ -100,6 +96,7 @@ def updateTXTrecord(entry):
 
     for NS in providers:
 
+        # -------- AKAMAI --------
         if NS == 'akam':
             try:
                 result = akam(record, value, "mod", zone, rtype, ttl)
@@ -116,12 +113,13 @@ def updateTXTrecord(entry):
                     "identical" in result.lower() or
                     "already exists" in result.lower()
                 ):
-                    print("Akamai: Record already correct → treating as SUCCESS")
+                    print("Akamai: Already correct → SUCCESS")
                     success = True
 
             except Exception as e:
                 print("Akamai Failed:", e)
 
+        # -------- CONSTELLIX --------
         elif NS == 'constellix':
             try:
                 result = ctel(record, value, "mod", zone, rtype, ttl)
@@ -138,7 +136,7 @@ def updateTXTrecord(entry):
                     "identical" in result.lower() or
                     "already exists" in result.lower()
                 ):
-                    print("Constellix: Record already correct → treating as SUCCESS")
+                    print("Constellix: Already correct → SUCCESS")
                     success = True
 
             except Exception as e:
@@ -177,8 +175,10 @@ def process_domains(domains):
 
     for d in domains:
         domain_name = d.get("domainName")
+        status = d.get("domainStatus")
 
-        if TEST_MODE and domain_name not in TEST_DOMAINS:
+        # ✅ ONLY PROCESS PENDING DOMAINS
+        if status not in ["REQUEST_ACCEPTED", "VALIDATION_IN_PROGRESS"]:
             continue
 
         challenge = d.get("validationChallenge", {})
