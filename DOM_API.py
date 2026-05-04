@@ -112,6 +112,13 @@ def updateTXTrecord(entry):
                 if result == 'Successful':
                     success = True
 
+                elif isinstance(result, str) and (
+                    "identical" in result.lower() or
+                    "already exists" in result.lower()
+                ):
+                    print("Akamai: Record already correct → treating as SUCCESS")
+                    success = True
+
             except Exception as e:
                 print("Akamai Failed:", e)
 
@@ -125,6 +132,13 @@ def updateTXTrecord(entry):
                     print("Constellix ADD:", result)
 
                 if result == 'Successful':
+                    success = True
+
+                elif isinstance(result, str) and (
+                    "identical" in result.lower() or
+                    "already exists" in result.lower()
+                ):
+                    print("Constellix: Record already correct → treating as SUCCESS")
                     success = True
 
             except Exception as e:
