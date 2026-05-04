@@ -12,7 +12,7 @@ from getNS import getNS
 EDGERC_PATH = "./.edgerc"
 SECTION = "default"
 
-BASE_URL = "https://akab-p63dmw3gdpa5cxgx-oivonvolbsqjgxex.luna.akamaiapis.net"
+BASE_URL = "https://YOUR_HOST.luna.akamaiapis.net"
 
 TTL = 300
 
