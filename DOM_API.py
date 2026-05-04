@@ -1,7 +1,11 @@
 import requests
 import time
 import tldextract
+import urllib3
 from akamai.edgegrid import EdgeGridAuth
+
+# Disable SSL warnings (optional)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # DNS Providers (ONLY THESE TWO)
 from core.akamDNS import akam
@@ -21,9 +25,9 @@ TEST_MODE = True
 TEST_DOMAINS = ["quicktest.in"]
 
 # -------- DNS + RETRY CONFIG --------
-DNS_PROPAGATION_WAIT = 60   # seconds
+DNS_PROPAGATION_WAIT = 60
 VALIDATION_RETRIES = 5
-RETRY_DELAY = 30            # seconds
+RETRY_DELAY = 30
 
 # ---------------------------------------
 
@@ -35,13 +39,11 @@ session.headers.update({
     "Content-Type": "application/json"
 })
 
-# ---------------- HELPER: EXTRACT RECORD + ZONE ----------------
+# ---------------- HELPER ----------------
 def extract_record_and_zone(fqdn):
     ext = tldextract.extract(fqdn)
-
-    zone = f"{ext.domain}.{ext.suffix}"   # correct root domain
-    record = fqdn.replace("." + zone, "")  # rest is record
-
+    zone = f"{ext.domain}.{ext.suffix}"
+    record = fqdn.replace("." + zone, "")
     return record, zone
 
 
@@ -58,7 +60,7 @@ def get_all_domains():
     all_domains = []
 
     while True:
-        response = session.get(url, params=params)
+        response = session.get(url, params=params, verify=False)
 
         if response.status_code != 200:
             print("Error fetching domains:", response.text)
@@ -85,10 +87,17 @@ def update_txt_record(record, value, zone):
     success = False
 
     for ns in providers:
+
+        # -------- AKAMAI --------
         if ns == "akam":
             try:
                 result = akam(record, value, "mod", zone, "TXT", TTL)
-                print("Akamai DNS:", result)
+                print("Akamai MOD:", result)
+
+                if result != "Successful":
+                    print("Akamai MOD failed → trying ADD")
+                    result = akam(record, value, "add", zone, "TXT", TTL)
+                    print("Akamai ADD:", result)
 
                 if result == "Successful":
                     success = True
@@ -96,16 +105,32 @@ def update_txt_record(record, value, zone):
             except Exception as e:
                 print(f"Akamai FAILED: {e}")
 
+        # -------- CONSTELLIX --------
         elif ns == "constellix":
             try:
                 result = ctel(record, value, "mod", zone, "TXT", TTL)
-                print("Constellix DNS:", result)
+                print("Constellix MOD:", result)
+
+                if result != "Successful":
+                    print("Constellix MOD failed → trying ADD")
+                    result = ctel(record, value, "add", zone, "TXT", TTL)
+                    print("Constellix ADD:", result)
 
                 if result == "Successful":
                     success = True
 
             except Exception as e:
-                print(f"Constellix FAILED for {record}.{zone}: {e}")
+                print(f"Constellix ERROR → trying ADD fallback")
+
+                try:
+                    result = ctel(record, value, "add", zone, "TXT", TTL)
+                    print("Constellix ADD (fallback):", result)
+
+                    if result == "Successful":
+                        success = True
+
+                except Exception as e2:
+                    print(f"Constellix FAILED completely: {e2}")
 
     return success
 
@@ -124,7 +149,7 @@ def validate_domain(domain):
         ]
     }
 
-    response = session.post(url, json=payload)
+    response = session.post(url, json=payload, verify=False)
 
     if response.status_code == 200:
         print(f"Validation triggered for {domain}")
@@ -136,25 +161,24 @@ def validate_domain(domain):
 
 # ---------------- MAIN PROCESS ----------------
 def process_domains(domains):
-    total_pending = 0
+    total_processed = 0
     success_updates = 0
     success_validations = 0
 
     for d in domains:
         domain_name = d.get("domainName")
 
-        # ✅ TEST MODE FILTER
+        # TEST MODE FILTER
         if TEST_MODE and domain_name not in TEST_DOMAINS:
             continue
 
         status = d.get("domainStatus")
 
-        # Allow TEST MODE to bypass status
         if not TEST_MODE:
             if status not in ["REQUEST_ACCEPTED", "VALIDATION_IN_PROGRESS"]:
                 continue
         else:
-            print(f"\nTEST MODE: Processing {domain_name} (ignoring status)")
+            print(f"\nTEST MODE: Processing {domain_name}")
 
         challenge = d.get("validationChallenge", {})
         txt = challenge.get("txtRecord")
@@ -162,7 +186,7 @@ def process_domains(domains):
         if not txt:
             continue
 
-        total_pending += 1
+        total_processed += 1
 
         record_name = txt.get("name")
         txt_value = txt.get("value")
@@ -172,12 +196,11 @@ def process_domains(domains):
         print(f"TXT Name : {record_name}")
         print(f"TXT Value: {txt_value}")
 
-        # ✅ Correct extraction
         record, zone = extract_record_and_zone(record_name)
 
         print(f"Parsed → record: {record}, zone: {zone}")
 
-        # ---- STEP 1: UPDATE DNS ----
+        # ---- STEP 1: DNS UPDATE ----
         updated = update_txt_record(record, txt_value, zone)
 
         if not updated:
@@ -186,11 +209,11 @@ def process_domains(domains):
 
         success_updates += 1
 
-        # ---- STEP 2: WAIT FOR DNS PROPAGATION ----
+        # ---- STEP 2: WAIT ----
         print(f"Waiting {DNS_PROPAGATION_WAIT}s for DNS propagation...")
         time.sleep(DNS_PROPAGATION_WAIT)
 
-        # ---- STEP 3: VALIDATE WITH RETRY ----
+        # ---- STEP 3: VALIDATE ----
         for attempt in range(1, VALIDATION_RETRIES + 1):
             print(f"Validation attempt {attempt} for {domain_name}")
 
@@ -202,7 +225,7 @@ def process_domains(domains):
             time.sleep(RETRY_DELAY)
 
     print("\n========== FINAL SUMMARY ==========")
-    print(f"Total Processed Domains : {total_pending}")
+    print(f"Total Processed Domains : {total_processed}")
     print(f"DNS Updates Successful  : {success_updates}")
     print(f"Validations Triggered   : {success_validations}")
 
