@@ -1,5 +1,6 @@
 import requests
 import time
+import tldextract
 from akamai.edgegrid import EdgeGridAuth
 
 # DNS Providers (ONLY THESE TWO)
@@ -15,13 +16,12 @@ BASE_URL = "https://akab-p63dmw3gdpa5cxgx-oivonvolbsqjgxex.luna.akamaiapis.net"
 
 TTL = 300
 
-#TEST MODE
-
+# -------- TEST MODE --------
 TEST_MODE = True
-TEST_DOMAINS = ["quicktest.in"]  
+TEST_DOMAINS = ["quicktest.in"]
 
-# DNS propagation + retry config
-DNS_PROPAGATION_WAIT = 60   # seconds (can increase to 120 if needed)
+# -------- DNS + RETRY CONFIG --------
+DNS_PROPAGATION_WAIT = 60   # seconds
 VALIDATION_RETRIES = 5
 RETRY_DELAY = 30            # seconds
 
@@ -34,6 +34,16 @@ session.headers.update({
     "Accept": "application/json",
     "Content-Type": "application/json"
 })
+
+# ---------------- HELPER: EXTRACT RECORD + ZONE ----------------
+def extract_record_and_zone(fqdn):
+    ext = tldextract.extract(fqdn)
+
+    zone = f"{ext.domain}.{ext.suffix}"   # correct root domain
+    record = fqdn.replace("." + zone, "")  # rest is record
+
+    return record, zone
+
 
 # ---------------- FETCH DOMAINS ----------------
 def get_all_domains():
@@ -70,20 +80,32 @@ def update_txt_record(record, value, zone):
     print(f"\nUpdating DNS for: {record}.{zone}")
 
     providers = getNS(zone, record, "TXT", "add")
+    print("Detected Providers:", providers)
+
     success = False
 
     for ns in providers:
         if ns == "akam":
-            result = akam(record, value, "mod", zone, "TXT", TTL)
-            print("Akamai DNS:", result)
-            if result == "Successful":
-                success = True
+            try:
+                result = akam(record, value, "mod", zone, "TXT", TTL)
+                print("Akamai DNS:", result)
+
+                if result == "Successful":
+                    success = True
+
+            except Exception as e:
+                print(f"Akamai FAILED: {e}")
 
         elif ns == "constellix":
-            result = ctel(record, value, "mod", zone, "TXT", TTL)
-            print("Constellix DNS:", result)
-            if result == "Successful":
-                success = True
+            try:
+                result = ctel(record, value, "mod", zone, "TXT", TTL)
+                print("Constellix DNS:", result)
+
+                if result == "Successful":
+                    success = True
+
+            except Exception as e:
+                print(f"Constellix FAILED for {record}.{zone}: {e}")
 
     return success
 
@@ -124,10 +146,15 @@ def process_domains(domains):
         # ✅ TEST MODE FILTER
         if TEST_MODE and domain_name not in TEST_DOMAINS:
             continue
+
         status = d.get("domainStatus")
 
-        if status not in ["REQUEST_ACCEPTED", "VALIDATION_IN_PROGRESS"]:
-            continue
+        # Allow TEST MODE to bypass status
+        if not TEST_MODE:
+            if status not in ["REQUEST_ACCEPTED", "VALIDATION_IN_PROGRESS"]:
+                continue
+        else:
+            print(f"\nTEST MODE: Processing {domain_name} (ignoring status)")
 
         challenge = d.get("validationChallenge", {})
         txt = challenge.get("txtRecord")
@@ -137,23 +164,18 @@ def process_domains(domains):
 
         total_pending += 1
 
-        domain_name = d["domainName"]
         record_name = txt.get("name")
         txt_value = txt.get("value")
 
         print("\n====================================")
-        print(f"Domain: {domain_name}")
-        print(f"TXT Name: {record_name}")
+        print(f"Domain   : {domain_name}")
+        print(f"TXT Name : {record_name}")
         print(f"TXT Value: {txt_value}")
 
-        # Extract zone + record
-        parts = record_name.split(".", 1)
-        if len(parts) < 2:
-            print("Invalid record format, skipping...")
-            continue
+        # ✅ Correct extraction
+        record, zone = extract_record_and_zone(record_name)
 
-        record = parts[0]
-        zone = parts[1]
+        print(f"Parsed → record: {record}, zone: {zone}")
 
         # ---- STEP 1: UPDATE DNS ----
         updated = update_txt_record(record, txt_value, zone)
@@ -180,7 +202,7 @@ def process_domains(domains):
             time.sleep(RETRY_DELAY)
 
     print("\n========== FINAL SUMMARY ==========")
-    print(f"Total Pending Domains   : {total_pending}")
+    print(f"Total Processed Domains : {total_pending}")
     print(f"DNS Updates Successful  : {success_updates}")
     print(f"Validations Triggered   : {success_validations}")
 
