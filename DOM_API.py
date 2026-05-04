@@ -83,17 +83,16 @@ def get_all_domains():
     return all_domains
 
 
-# ---------------- DNS UPDATE (OLD SCRIPT STYLE) ----------------
+# ---------------- DNS UPDATE (OLD SCRIPT STYLE + ADD FALLBACK) ----------------
 def updateTXTrecord(entry):
     record = entry["record"]
     zone = entry["zone"]
     ttl = entry["ttl"]
     value = entry["value"]
     rtype = entry["rtype"]
-    action = entry["action"]
 
     print(f"\nUpdating: {record}.{zone}")
-    print(f"Structured Input → {record},{zone},{ttl},{rtype},{value},{action}")
+    print(f"Structured Input → {record},{zone},{ttl},{rtype},{value}")
 
     providers = getNS(zone, record, rtype, 'add')
     print("Detected Providers:", providers)
@@ -105,29 +104,60 @@ def updateTXTrecord(entry):
         # ---- AKAMAI ----
         if NS == 'akam':
             try:
-                result = akam(record, value, action, zone, rtype, ttl)
-                print("Akamai:", result)
+                # Try MODIFY first
+                result = akam(record, value, "mod", zone, rtype, ttl)
+                print("Akamai MOD:", result)
+
+                if result != 'Successful':
+                    print("Akamai MOD failed → trying ADD")
+                    result = akam(record, value, "add", zone, rtype, ttl)
+                    print("Akamai ADD:", result)
 
                 if result == 'Successful':
                     success = True
 
             except Exception as e:
-                print("Akamai Failed:", e)
+                print("Akamai ERROR → trying ADD")
+
+                try:
+                    result = akam(record, value, "add", zone, rtype, ttl)
+                    print("Akamai ADD (fallback):", result)
+
+                    if result == 'Successful':
+                        success = True
+
+                except Exception as e2:
+                    print("Akamai FAILED completely:", e2)
 
         # ---- CONSTELLIX ----
         elif NS == 'constellix':
             try:
-                result = ctel(record, value, action, zone, rtype, ttl)
-                print("Constellix:", result)
+                # Try MODIFY first
+                result = ctel(record, value, "mod", zone, rtype, ttl)
+                print("Constellix MOD:", result)
+
+                if result != 'Successful':
+                    print("Constellix MOD failed → trying ADD")
+                    result = ctel(record, value, "add", zone, rtype, ttl)
+                    print("Constellix ADD:", result)
 
                 if result == 'Successful':
                     success = True
 
             except Exception as e:
-                print("Constellix Failed:", e)
+                print("Constellix ERROR → trying ADD")
+
+                try:
+                    result = ctel(record, value, "add", zone, rtype, ttl)
+                    print("Constellix ADD (fallback):", result)
+
+                    if result == 'Successful':
+                        success = True
+
+                except Exception as e2:
+                    print("Constellix FAILED completely:", e2)
 
     return success
-
 
 # ---------------- VALIDATE DOMAIN ----------------
 def validate_domain(domain):
