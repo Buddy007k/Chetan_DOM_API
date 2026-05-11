@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # DNS Providers
 from core.akamDNS import akam
-from core.ctelx_v2 import ctel
+from core.cnstelx import ctel
 from getNS import getNS
 
 # ---------------- CONFIG ----------------
@@ -39,7 +39,9 @@ def build_structured_entry(record_name, txt_value):
     ext = tldextract.extract(record_name)
 
     zone = f"{ext.domain}.{ext.suffix}"
-    record = record_name.replace("." + zone, "")
+
+    # ✅ safer parsing (no replace issues)
+    record = record_name[:-(len(zone) + 1)]
 
     return {
         "record": record,
@@ -99,11 +101,16 @@ def updateTXTrecord(entry):
         # -------- AKAMAI --------
         if NS == 'akam':
             try:
-                result = akam(record, value, "mod", zone, rtype, ttl)
+                # ✅ IMPORTANT FIX: use FQDN for Akamai
+                akam_record = f"{record}.{zone}"
+
+                print(f"[Akamai] Using FQDN: {akam_record}")
+
+                result = akam(akam_record, value, "mod", zone, rtype, ttl)
                 print("Akamai MOD:", result)
 
                 if result != 'Successful':
-                    result = akam(record, value, "add", zone, rtype, ttl)
+                    result = akam(akam_record, value, "add", zone, rtype, ttl)
                     print("Akamai ADD:", result)
 
                 if result == 'Successful':
