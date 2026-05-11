@@ -8,8 +8,9 @@ from akamai.edgegrid import EdgeGridAuth
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # DNS Providers
-from core.akamDNS import akam
+from core.akamEdgeDNS import akam
 from core.cnstelx import ctel
+from core.awsDNS import awsdns
 from getNS import getNS
 
 # ---------------- CONFIG ----------------
@@ -148,6 +149,28 @@ def updateTXTrecord(entry):
 
             except Exception as e:
                 print("Constellix Failed:", e)
+        
+        # -------- AWS --------
+        elif NS == 'aws':
+            try:
+                result = awsdns(record, value, "mod", zone, rtype, ttl)
+                print("AWS MOD:", result)
+
+                if result != 'Successful':
+                    result = awsdns(record, value, "add", zone, rtype, ttl)
+                    print("AWS ADD:", result)
+
+                if result == 'Successful':
+                    success = True
+
+                elif isinstance(result, str) and (
+                    "already exists" in result.lower()
+                ):
+                    print("AWS: Already correct → SUCCESS")
+                    success = True
+
+            except Exception as e:
+                print("AWS Failed:", e)
 
     return success
 
