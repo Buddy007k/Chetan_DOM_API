@@ -2,6 +2,7 @@ import requests
 import time
 import urllib3
 import tldextract
+import configparser
 from akamai.edgegrid import EdgeGridAuth
 
 # Disable SSL warnings
@@ -17,7 +18,13 @@ from getNS import getNS
 EDGERC_PATH = "./.edgerc"
 SECTION = "default"
 
-BASE_URL = "https://akab-p63dmw3gdpa5cxgx-oivonvolbsqjgxex.luna.akamaiapis.net"
+config = configparser.ConfigParser()
+config.read(EDGERC_PATH)
+
+if not config.has_option(SECTION, "host"):
+    raise Exception(f"'host' not found in section [{SECTION}] of .edgerc")
+
+BASE_URL = f"https://{config.get(SECTION, 'host')}"
 
 TTL = "300"
 
